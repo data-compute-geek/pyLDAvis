@@ -1,0 +1,139 @@
+#https://www.machinelearningplus.com/nlp/topic-modeling-visualization-how-to-present-results-lda-models/
+
+
+import re, numpy as np, pandas as pd
+from pprint import pprint
+
+
+# Gensim
+import gensim
+import h5py
+import spacy
+import logging, warnings
+import pickle
+
+import gensim.corpora as corpora
+from gensim.utils import simple_preprocess
+from gensim.models import CoherenceModel
+import matplotlib.pyplot as plt
+
+
+
+
+# NLTK Stop words
+import nltk
+#nltk.download('stopwords')
+from nltk.corpus import stopwords
+stop_words = stopwords.words('english')
+stop_words.extend(['from', 'subject', 're', 'edu', 'use', 'not', 'would', 'say', 'could', '_', 'be', 'know', 'good', 'go', 'get', 'do', 'done', 'try', 'many', 'some', 'nice', 'thank', 'think', 'see', 'rather', 'easy', 'easily', 'lot', 'lack', 'make', 'want', 'seem', 'run', 'need', 'even', 'right', 'line', 'even', 'also', 'may', 'take', 'come'])
+
+# %matplotlib inline
+# warnings.filterwarnings("ignore",category=DeprecationWarning)
+# logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.ERROR)
+
+#2. Import NewsGroups Dataset
+if 1:
+    df = pd.read_json('https://raw.githubusercontent.com/selva86/datasets/master/newsgroups.json')
+    df = df.loc[df.target_names.isin(['soc.religion.christian', 'rec.sport.hockey', 'talk.politics.mideast', 'rec.motorcycles']) , :]
+    print(df.shape)  #> (2361, 3)
+    df.head()
+
+
+#3. Tokenize Sentences and Clean
+if 1:
+    def sent_to_words(sentences):
+        for sent in sentences:
+            sent = re.sub('\S*@\S*\s?', '', sent)  # remove emails
+            sent = re.sub('\s+', ' ', sent)  # remove newline chars
+            sent = re.sub("\'", "", sent)  # remove single quotes
+            sent = gensim.utils.simple_preprocess(str(sent), deacc=True) 
+            yield(sent)  
+
+    # Convert to list
+    data = df.content.values.tolist()
+    data_words = list(sent_to_words(data))
+    print(data_words[0:1])
+    # [['from', 'irwin', 'arnstein', 'subject', 're', 'recommendation', 'on', 'duc', 'summary', 'whats', 'it', 'worth', 'distribution', 'usa', 'expires', 'sat', 'may', 'gmt', ...trucated...]]
+
+
+#4. Build the Bigram, Trigram Models and Lemmatize
+if 1:
+
+    # Build the bigram and trigram models
+    bigram = gensim.models.Phrases(data_words, min_count=5, threshold=100) # higher threshold fewer phrases.
+    trigram = gensim.models.Phrases(bigram[data_words], threshold=100)  
+    bigram_mod = gensim.models.phrases.Phraser(bigram)
+    trigram_mod = gensim.models.phrases.Phraser(trigram)
+
+
+
+    #!{sys.executable} -m spacy download en_core_web_sm
+
+    # !python3 -m spacy download en  # run in terminal once
+    def process_words(texts, stop_words=stop_words, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
+        """Remove Stopwords, Form Bigrams, Trigrams and Lemmatization"""
+        texts = [[word for word in simple_preprocess(str(doc)) if word not in stop_words] for doc in texts]
+        texts = [bigram_mod[doc] for doc in texts]
+        texts = [trigram_mod[bigram_mod[doc]] for doc in texts]
+        texts_out = []
+        #nlp = spacy.load('en', disable=['parser', 'ner'])
+        nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+        
+        for sent in texts:
+            doc = nlp(" ".join(sent)) 
+            texts_out.append([token.lemma_ for token in doc if token.pos_ in allowed_postags])
+        # remove stopwords once more after lemmatization
+        texts_out = [[word for word in simple_preprocess(str(doc)) if word not in stop_words] for doc in texts_out]    
+        return texts_out
+
+    data_ready = process_words(data_words)  # processed Text Data!
+
+
+#5. Build the Topic Model
+if 1:
+    # Create Dictionary
+
+    id2word = corpora.Dictionary(data_ready)
+
+    # Create Corpus: Term Document Frequency
+    corpus = [id2word.doc2bow(text) for text in data_ready]
+
+    fn='data/corpus_tutorial.pkl'
+    with open(fn, 'wb') as f:
+        pickle.dump(corpus, f)
+
+
+
+    # Build LDA model
+    lda_model = gensim.models.ldamodel.LdaModel(corpus=corpus,
+                                            id2word=id2word,
+                                            num_topics=4, 
+                                            random_state=100,
+                                            update_every=1,
+                                            chunksize=10,
+                                            passes=10,
+                                            alpha='symmetric',
+                                            iterations=100,
+                                            per_word_topics=True)
+
+    pprint(lda_model.print_topics())
+
+    fn='data/lda_model_tutorial.pkl'
+    with open(fn, 'wb') as f:
+        pickle.dump(lda_model, f)
+
+
+#6. pyLDAVis
+if 1:
+    import pyLDAvis
+    
+    import pyLDAvis.gensim_models
+    
+    pyLDAvis.enable_notebook()
+    vis_tutorial = pyLDAvis.gensim_models.prepare(lda_model, corpus, dictionary=lda_model.id2word)
+    vis_tutorial
+    #vis = pyLDAvis.gensim.prepare(lda_model, corpus, dictionary=lda_model.id2word)
+    pyLDAvis.save_html(vis_tutorial, 'data/lda_visualization_tutorial.html')
+    pyLDAvis.save_json(vis_tutorial, 'data/lda_visualization_tutorial.json')
+
+
